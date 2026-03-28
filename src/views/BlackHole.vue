@@ -120,6 +120,9 @@
         <span class="label">待领取</span>
         <span class="value highlight" style="font-size: 16px;">{{ channelInfo.pending }}</span>
       </div>
+      <div v-if="channelInfo.poolInsufficient" class="pool-warning">
+        奖池余额不足，理论应得 {{ channelInfo.pendingRaw }}，当前可领 {{ channelInfo.pending }}
+      </div>
 
       <!-- 出局进度条 -->
       <div class="progress-bar-wrap">
@@ -168,6 +171,8 @@ const channelInfo = reactive({
   refCredited: '--',
   lbCredited: '--',
   pending: '--',
+  pendingRaw: '--',       // 理论应得（原始值）
+  poolInsufficient: false, // 奖池是否不足
   progressPct: 0,
 })
 
@@ -205,7 +210,20 @@ async function loadChannelInfo() {
     channelInfo.withdrawn = fmt(info.withdrawn)
     channelInfo.refCredited = fmt(info.refCredited)
     channelInfo.lbCredited = fmt(info.lbCredited)
-    channelInfo.pending = fmt(info.pending)
+
+    // 获取奖池实际余额，显示真实可领取金额
+    const pendingRaw = BigInt(info.pending)
+    let poolBalance
+    if (isBNB) {
+      poolBalance = await props.provider.getBalance(DAPP_ADDRESS)
+    } else {
+      const tokenContract = new Contract(TOKEN_ADDRESS, TOKEN_ABI, props.provider)
+      poolBalance = await tokenContract.balanceOf(DAPP_ADDRESS)
+    }
+    const actualClaimable = pendingRaw < poolBalance ? pendingRaw : poolBalance
+    channelInfo.pending = fmt(actualClaimable)
+    channelInfo.pendingRaw = fmt(pendingRaw)
+    channelInfo.poolInsufficient = pendingRaw > 0n && pendingRaw > poolBalance
 
     const totalClaimed = BigInt(info.withdrawn) + BigInt(info.refCredited) + BigInt(info.lbCredited)
     const totalTarget = BigInt(info.totalReward)
@@ -259,6 +277,28 @@ async function handleClaim() {
   claimLoading.value = true
   try {
     const dapp = new Contract(DAPP_ADDRESS, DAPP_ABI, props.signer)
+
+    // 领取前检查合约余额是否足够
+    if (activeChannel.value === 'bnb') {
+      const provider = props.signer.provider
+      const contractBalance = await provider.getBalance(DAPP_ADDRESS)
+      const pending = await dapp.pendingBNBDividend(props.wallet)
+      if (contractBalance < pending) {
+        alert('当前合约BNB余额不足，请稍后再试，避免资金损失')
+        claimLoading.value = false
+        return
+      }
+    } else {
+      const tokenContract = new Contract(TOKEN_ADDRESS, TOKEN_ABI, props.signer.provider)
+      const contractBalance = await tokenContract.balanceOf(DAPP_ADDRESS)
+      const pending = await dapp.pendingTokenDividend(props.wallet)
+      if (contractBalance < pending) {
+        alert('当前合约代币余额不足，请稍后再试')
+        claimLoading.value = false
+        return
+      }
+    }
+
     const fn = activeChannel.value === 'bnb' ? 'claimBNBDividend' : 'claimTokenDividend'
     const tx = await dapp[fn]()
     await tx.wait()
@@ -340,5 +380,16 @@ onMounted(() => { loadGlobalStats(); loadChannelInfo() })
   background: var(--gradient-fire);
   border-radius: 3px;
   transition: width 0.6s ease;
+}
+
+.pool-warning {
+  margin-top: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #ff9800;
+  background: rgba(255, 152, 0, 0.1);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  border-radius: var(--radius-sm);
+  line-height: 1.4;
 }
 </style>
