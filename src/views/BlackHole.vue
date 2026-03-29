@@ -121,7 +121,7 @@
         <span class="value highlight" style="font-size: 16px;">{{ channelInfo.pending }}</span>
       </div>
       <div v-if="channelInfo.poolInsufficient" class="pool-warning">
-        奖池余额不足，理论应得 {{ channelInfo.pendingRaw }}，当前可领 {{ channelInfo.pending }}
+        奖池未累计足够奖励，理论应得 {{ channelInfo.pendingRaw }}，当前可领 {{ channelInfo.pending }}
       </div>
 
       <!-- 出局进度条 -->
@@ -217,7 +217,10 @@ async function loadChannelInfo() {
     const maxRemaining = totalTarget > totalClaimed ? totalTarget - totalClaimed : 0n
     const pendingRaw = BigInt(info.pending) > maxRemaining ? maxRemaining : BigInt(info.pending)
 
-    // 获取奖池实际余额，显示真实可领取金额
+    // 获取奖池实际余额 & 排行榜预留，计算真实可领取金额
+    const lbPool = await dapp.getLeaderboardPoolInfo()
+    const lbReserve = isBNB ? BigInt(lbPool.bnbPool) : BigInt(lbPool.tokenPool)
+
     let poolBalance
     if (isBNB) {
       poolBalance = await props.provider.getBalance(DAPP_ADDRESS)
@@ -225,10 +228,12 @@ async function loadChannelInfo() {
       const tokenContract = new Contract(TOKEN_ADDRESS, TOKEN_ABI, props.provider)
       poolBalance = await tokenContract.balanceOf(DAPP_ADDRESS)
     }
-    const actualClaimable = pendingRaw < poolBalance ? pendingRaw : poolBalance
+    // 可用余额 = 合约余额 - 排行榜预留
+    const availableBalance = poolBalance > lbReserve ? poolBalance - lbReserve : 0n
+    const actualClaimable = pendingRaw < availableBalance ? pendingRaw : availableBalance
     channelInfo.pending = fmt(actualClaimable)
     channelInfo.pendingRaw = fmt(pendingRaw)
-    channelInfo.poolInsufficient = pendingRaw > 0n && pendingRaw > poolBalance
+    channelInfo.poolInsufficient = pendingRaw > 0n && pendingRaw > availableBalance
 
     channelInfo.progressPct = totalTarget > 0n
       ? Math.min(100, Number((totalClaimed * 100n) / totalTarget))
@@ -297,7 +302,10 @@ async function handleClaim() {
       return
     }
 
-    // 检查合约余额是否足够
+    // 检查合约余额是否足够（扣除排行榜预留）
+    const lbPool = await dapp.getLeaderboardPoolInfo()
+    const lbReserve = isBNB ? BigInt(lbPool.bnbPool) : BigInt(lbPool.tokenPool)
+
     let contractBalance
     if (isBNB) {
       contractBalance = await props.signer.provider.getBalance(DAPP_ADDRESS)
@@ -305,8 +313,9 @@ async function handleClaim() {
       const tokenContract = new Contract(TOKEN_ADDRESS, TOKEN_ABI, props.signer.provider)
       contractBalance = await tokenContract.balanceOf(DAPP_ADDRESS)
     }
-    if (contractBalance < realPending) {
-      alert(isBNB ? '当前合约BNB余额不足，请稍后再试，避免资金损失' : '当前合约代币余额不足，请稍后再试')
+    const availableBalance = contractBalance > lbReserve ? contractBalance - lbReserve : 0n
+    if (availableBalance < realPending) {
+      alert('当前奖池未累计足够奖励，请稍后再试')
       claimLoading.value = false
       return
     }
