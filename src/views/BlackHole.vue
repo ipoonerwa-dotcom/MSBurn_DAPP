@@ -118,10 +118,7 @@
       </div>
       <div class="data-row">
         <span class="label">待领取</span>
-        <span class="value highlight" style="font-size: 16px;">{{ channelInfo.pending }}</span>
-      </div>
-      <div v-if="channelInfo.poolInsufficient" class="pool-warning">
-        奖池未累计足够奖励，理论应得 {{ channelInfo.pendingRaw }}，当前可领 {{ channelInfo.pending }}
+        <span class="value highlight" style="font-size: 16px;">{{ channelInfo.hasPending ? '有可领分红' : '暂无' }}</span>
       </div>
 
       <!-- 出局进度条 -->
@@ -170,9 +167,7 @@ const channelInfo = reactive({
   withdrawn: '--',
   refCredited: '--',
   lbCredited: '--',
-  pending: '--',
-  pendingRaw: '--',       // 理论应得（原始值）
-  poolInsufficient: false, // 奖池是否不足
+  hasPending: false,       // 是否有可领分红
   progressPct: 0,
 })
 
@@ -217,23 +212,7 @@ async function loadChannelInfo() {
     const maxRemaining = totalTarget > totalClaimed ? totalTarget - totalClaimed : 0n
     const pendingRaw = BigInt(info.pending) > maxRemaining ? maxRemaining : BigInt(info.pending)
 
-    // 获取奖池实际余额 & 排行榜预留，计算真实可领取金额
-    const lbPool = await dapp.getLeaderboardPoolInfo()
-    const lbReserve = isBNB ? BigInt(lbPool.bnbPool) : BigInt(lbPool.tokenPool)
-
-    let poolBalance
-    if (isBNB) {
-      poolBalance = await props.provider.getBalance(DAPP_ADDRESS)
-    } else {
-      const tokenContract = new Contract(TOKEN_ADDRESS, TOKEN_ABI, props.provider)
-      poolBalance = await tokenContract.balanceOf(DAPP_ADDRESS)
-    }
-    // 可用余额 = 合约余额 - 排行榜预留
-    const availableBalance = poolBalance > lbReserve ? poolBalance - lbReserve : 0n
-    const actualClaimable = pendingRaw < availableBalance ? pendingRaw : availableBalance
-    channelInfo.pending = fmt(actualClaimable)
-    channelInfo.pendingRaw = fmt(pendingRaw)
-    channelInfo.poolInsufficient = pendingRaw > 0n && pendingRaw > availableBalance
+    channelInfo.hasPending = pendingRaw > 0n
 
     channelInfo.progressPct = totalTarget > 0n
       ? Math.min(100, Number((totalClaimed * 100n) / totalTarget))
